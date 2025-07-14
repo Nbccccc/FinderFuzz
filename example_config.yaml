@@ -1,0 +1,148 @@
+# FinderFuzz 配置文件示例
+# 使用 -i 参数指定此配置文件来覆盖默认配置
+
+# 基础配置
+headers:
+  User-Agent: "Custom FinderFuzz Scanner v1.0"
+  Authorization: "Bearer your-token-here"
+  X-Custom-Header: "custom-value"
+
+proxy: "http://127.0.0.1:8080"
+timeout: 15000  # 15秒超时
+thread: 20      # 20个线程
+max: 200        # 最大爬取200个页面
+
+# JS和URL查找配置
+js_find:
+  - "(https{0,1}:[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)"
+  - "[\"''`]\\s{0,6}(/{0,1}[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)"
+
+url_find:
+  - "[\"''`]\\s{0,6}(https{0,1}:[-a-zA-Z0-9()@:%_\\+.~#?&//={}]{2,250}?)\\s{0,6}[\"''`]"
+  - "/api/[a-zA-Z0-9/_-]+"
+  - "/v[0-9]+/[a-zA-Z0-9/_-]+"
+
+# 敏感信息检测配置
+info_find:
+  phone:
+    - "1[3-9]\\d{9}"
+    - "\\+86[- ]?1[3-9]\\d{9}"
+  email:
+    - "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+  jwt:
+    - "eyJ[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*\\.[A-Za-z0-9_-]*"
+
+# 云服务AKSK检测
+aksk_find:
+  aws:
+    - "AKIA[0-9A-Z]{16}"
+    - "[A-Za-z0-9/+=]{40}"
+  aliyun:
+    - "LTAI[a-zA-Z0-9]{12,20}"
+
+# 域名和IP检测
+cloud_domains:
+  - "[a-zA-Z0-9.-]+\\.amazonaws\\.com"
+  - "[a-zA-Z0-9.-]+\\.aliyuncs\\.com"
+  - "[a-zA-Z0-9.-]+\\.myqcloud\\.com"
+
+domain_find:
+  - "https?://([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})"
+  - "['\"']([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})['\"']"
+
+ip_find:
+  - "\\b(?:[0-9]{1,3}\\.){3}[0-9]{1,3}\\b"
+
+# 权限检测配置
+unauthorized_keywords:
+  - "unauthorized"
+  - "forbidden"
+  - "access denied"
+  - "权限不足"
+  - "未授权"
+  - "禁止访问"
+
+param_error_keywords:
+  - "参数错误"
+  - "parameter error"
+  - "missing parameter"
+  - "参数缺失"
+  - "field required"
+
+common_params:
+  - "id"
+  - "uid"
+  - "user_id"
+  - "username"
+  - "password"
+  - "token"
+  - "page"
+  - "limit"
+  - "query"
+
+# 新增的可配置项
+
+# 危险路由关键词
+dangerous_keywords:
+  - "delete"
+  - "remove"
+  - "destroy"
+  - "logout"
+  - "kill"
+  - "shutdown"
+  - "update"
+  - "modify"
+  - "reset"
+  - "clear"
+
+# 敏感信息检测模式
+sensitive_patterns:
+  default:
+    - "password"
+    - "secret"
+    - "token"
+    - "api[_-]?key"
+    - "private[_-]?key"
+    - "database"
+    - "config"
+    - "admin"
+    - "debug"
+  custom:
+    - "internal"
+    - "confidential"
+    - "classified"
+
+# API路径提取模式
+api_patterns:
+  - "[\"']/api/[a-zA-Z0-9/_-]+[\"']"
+  - "[\"']/v[0-9]+/[a-zA-Z0-9/_-]+[\"']"
+  - "[\"'][a-zA-Z0-9/_-]*\\.php[\"']"
+  - "[\"'][a-zA-Z0-9/_-]*\\.jsp[\"']"
+  - "[\"']/[a-zA-Z0-9/_-]+[\"']"
+
+# 参数名提取模式
+param_name_patterns:
+  - "parameter[\\s'\"]*([a-zA-Z_][a-zA-Z0-9_]*)[\\s'\"]*"
+  - "param[\\s'\"]*([a-zA-Z_][a-zA-Z0-9_]*)[\\s'\"]*"
+  - "field[\\s'\"]*([a-zA-Z_][a-zA-Z0-9_]*)[\\s'\"]*"
+  - "missing[\\s'\"]*([a-zA-Z_][a-zA-Z0-9_]*)[\\s'\"]*"
+  - "required[\\s'\"]*([a-zA-Z_][a-zA-Z0-9_]*)[\\s'\"]*"
+
+# 文件上传测试配置
+file_upload_test_data:
+  boundary: "----WebKitFormBoundaryCustomTest123"
+  filename: "test.txt"
+  content: "This is a custom test file content."
+  contentType: "text/plain"
+
+# 文件上传专用请求头
+file_upload_headers:
+  User-Agent: "Mozilla/5.0 (Custom FinderFuzz Upload Test)"
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+  Accept-Encoding: "gzip, deflate"
+  Accept-Language: "zh-CN,zh;q=0.9,en;q=0.8"
+  X-Upload-Test: "true"
+
+# 响应内容大小阈值
+max_response_size: 15000  # 最大响应大小（字节）
+min_response_size: 50     # 最小响应大小（字节）
