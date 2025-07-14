@@ -35,7 +35,8 @@
 
 
 ## 使用示例
-
+![image-20250714135853104](https://github.com/Nbccccc/FinderFuzz/blob/main/img/1752472578926.jpg)
+![image-20250714135853104](https://github.com/Nbccccc/FinderFuzz/blob/main/img/1752472657322.jpg)
 ### 基础扫描
 
 ```bash
