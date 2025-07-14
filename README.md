@@ -197,22 +197,6 @@ dangerous_keywords:
   - "reset"
   - "clear"
 
-# 敏感信息检测模式
-sensitive_patterns:
-  default:
-    - "password"
-    - "secret"
-    - "token"
-    - "api[_-]?key"
-    - "private[_-]?key"
-    - "database"
-    - "config"
-    - "admin"
-    - "debug"
-  custom:
-    - "internal"
-    - "confidential"
-    - "classified"
 
 # API路径提取模式
 api_patterns:
