@@ -1,13 +1,10 @@
 # FinderFuzz
-
-<div align="center">
-
 ![FinderFuzz Logo](https://img.shields.io/badge/FinderFuzz-v1.0.0-blue.svg)
 ![Go Version](https://img.shields.io/badge/Go-1.20+-00ADD8.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
-
-## 🚀功能特性
+## 
+## 功能特性
 
 ### 链接爬取
 
@@ -23,7 +20,6 @@
 - **密钥识别**: API密钥、访问令牌、数据库密钥等
 - **云服务AKSK**: AWS、阿里云、腾讯云、百度云等密钥检测
 - **自定义规则**: 支持正则表达式自定义检测规则
-
 ### Fuzz
 
 - **目录遍历**: 基于发现的路径进行智能目录模糊测试
@@ -37,7 +33,6 @@
 - **双权限头模式**: 支持同时使用高低权限请求头对比
 - **灵活配置**: 支持从文件读取请求头配置
 
-## 安装使用
 
 ## 使用示例
 
@@ -270,7 +265,7 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36
 ```
 
-## 📋 命令行选项
+## 命令行选项
 
 ```
 用法:
@@ -318,4 +313,3 @@ User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 
 
 **如果这个项目对你有帮助，请给个 ⭐ Star 支持一下！**
-
