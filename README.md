@@ -91,7 +91,7 @@
 ./finderfuzz -u https://example.com -i config.yaml
 ```
 
-## ⚙️ 配置说明
+## 配置说明
 
 ### 配置文件示例 (config.yaml)
 
