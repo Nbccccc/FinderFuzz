@@ -44,7 +44,7 @@ var (
 		`Bearer\s+eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*`,
 	}
 
-	// 各种密钥和令牌（优化后的正则表达式）
+	// 各种密钥和令牌
 	Key = []string{
 		// API密钥
 		`['"]?(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token)['"]?\s*[:=]\s*['"][^'"\s]{10,}['"]`,
@@ -66,7 +66,7 @@ var (
 		`['"]?(aws|azure|gcp|alibaba|tencent|baidu)[_-]?key['"]?\s*[:=]\s*['"][^'"\s]{10,}['"]`,
 	}
 
-	// 密码相关（优化后的正则表达式）
+	// 密码相关
 	Password = []string{
 		// 常见密码字段
 		`['"]?(password|passwd|pwd|pass|secret|credential)['"]?\s*[:=]\s*['"][^'"\s]{6,}['"]`,
@@ -76,7 +76,7 @@ var (
 		`['"]?(admin|root|user)['"]?\s*[:=]\s*['"][^'"\s]{6,}['"]`,
 	}
 
-	// 用户名相关（优化后的正则表达式）
+	// 用户名相关
 	Name = []string{
 		// 账户信息
 		`['"]?(username|account|email)['"]?\s*[:=]\s*['"][^'"\s]{3,}['"]`,
@@ -90,7 +90,7 @@ var (
 		`['"]?(displayname|screenname|alias|handle)['"]?\s*[:=]\s*['"][^'"\s]{2,}['"]`,
 	}
 
-	// 其他敏感信息（下划线和驼峰命名变体）
+	// 其他敏感信息
 	Other = []string{
 		// API密钥变体
 		`['"]?(api_key|apikey|secret_key|secretkey)['"]?\s*[:=]\s*['"][^'"\s]{10,}['"]`,
@@ -141,7 +141,7 @@ var (
 		".*\\.js$|.*\\.css$|.*\\.scss$|.*,$|.*\\.jpeg$|.*\\.jpg$|.*\\.png$|.*\\.gif$|.*\\.ico$|.*\\.svg$|.*\\.vue$|.*\\.ts$",
 	}
 
-	// 云服务AKSK检测（优化后的正则表达式）
+	// 云服务AKSK检测
 	// AWS Access Key 和 Secret Key
 	AWSAKSK = []string{
 		`AKIA[0-9A-Z]{16}`, // AWS Access Key ID
