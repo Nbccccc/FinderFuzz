@@ -178,8 +178,6 @@ common_params:
   - "limit"
   - "query"
 
-# 新增的可配置项
-
 # 危险路由关键词
 dangerous_keywords:
   - "delete"
