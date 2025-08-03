@@ -40,8 +40,8 @@ var (
 
 	// JWT Token
 	Jwt = []string{
-		`eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*`,
-		`Bearer\s+eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*`,
+		`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`,
+		`\bBearer\s+eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`,
 	}
 
 	// 各种密钥和令牌
@@ -66,7 +66,7 @@ var (
 		`['"]?(aws|azure|gcp|alibaba|tencent|baidu)[_-]?key['"]?\s*[:=]\s*['"][^'"\s]{10,}['"]`,
 	}
 
-	// 密码相关
+	// 密码相关（优化后的正则表达式）
 	Password = []string{
 		// 常见密码字段
 		`['"]?(password|passwd|pwd|pass|secret|credential)['"]?\s*[:=]\s*['"][^'"\s]{6,}['"]`,
@@ -76,7 +76,7 @@ var (
 		`['"]?(admin|root|user)['"]?\s*[:=]\s*['"][^'"\s]{6,}['"]`,
 	}
 
-	// 用户名相关
+	// 用户名相关（优化后的正则表达式）
 	Name = []string{
 		// 账户信息
 		`['"]?(username|account|email)['"]?\s*[:=]\s*['"][^'"\s]{3,}['"]`,
@@ -90,7 +90,7 @@ var (
 		`['"]?(displayname|screenname|alias|handle)['"]?\s*[:=]\s*['"][^'"\s]{2,}['"]`,
 	}
 
-	// 其他敏感信息
+	// 其他敏感信息（下划线和驼峰命名变体）
 	Other = []string{
 		// API密钥变体
 		`['"]?(api_key|apikey|secret_key|secretkey)['"]?\s*[:=]\s*['"][^'"\s]{10,}['"]`,
@@ -108,11 +108,16 @@ var (
 		`['"]?(session_id|sessionid|cookie_value|cookievalue)['"]?\s*[:=]\s*['"][^'"\s]{10,}['"]`,
 	}
 
-	// JS文件查找正则
+	//JsFind = []string{
+	//	"(https{0,1}:[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)",
+	//	"[\"''`]\\s{0,6}(/{0,1}[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)",
+	//	"=\\s{0,6}[\",'',\"]\\s{0,6}(/{0,1}[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)",
+	//}
+	// JsFind JS文件查找正则
 	JsFind = []string{
-		"(https{0,1}:[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)",
-		"[\"''`]\\s{0,6}(/{0,1}[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)",
-		"=\\s{0,6}[\",'',\"]\\s{0,6}(/{0,1}[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{2,250}?[-a-zA-Z0-9（）@:%_\\+.~#?&//=]{3}[.]js)",
+		`(https?:[-a-zA-Z0-9()@:%_\\+.~#?&//=]{0,250}?\.js)`,
+		"[\"'`]\\s{0,6}(/?[-a-zA-Z0-9()@:%_\\+.~#?&//=]{0,250}?\\.js)",
+		"=\\s{0,6}[\"'`]\\s{0,6}(/?[-a-zA-Z0-9()@:%_\\+.~#?&//=]{0,250}?\\.js)",
 	}
 
 	// URL查找正则
@@ -137,11 +142,10 @@ var (
 
 	// URL过滤规则
 	UrlFiler = []string{
-		"\\.js\\?|\\.css\\?|\\.jpeg\\?|\\.jpg\\?|\\.png\\?|.gif\\?|www\\.w3\\.org|example\\.com|\\<|\\>|\\{|\\}|\\[|\\]|\\||\\^|;|/js/|\\.src|\\.replace|\\.url|\\.att|\\.href|location\\.href|javascript:|location:|application/x-www-form-urlencoded|\\.createObject|:location|\\.path|\\*#__PURE__\\*|\\*\\$0\\*|\\n",
-		".*\\.js$|.*\\.css$|.*\\.scss$|.*,$|.*\\.jpeg$|.*\\.jpg$|.*\\.png$|.*\\.gif$|.*\\.ico$|.*\\.svg$|.*\\.vue$|.*\\.ts$",
+		".*\\.css$|.*\\.scss$|.*,$|.*\\.jpeg$|.*\\.jpg$|.*\\.png$|.*\\.gif$|.*\\.ico$|.*\\.svg$|.*\\.vue$|.*\\.ts$",
 	}
 
-	// 云服务AKSK检测
+	// 云服务AKSK检测（优化后的正则表达式）
 	// AWS Access Key 和 Secret Key
 	AWSAKSK = []string{
 		`AKIA[0-9A-Z]{16}`, // AWS Access Key ID
@@ -201,9 +205,9 @@ var (
 
 	// 危险路由关键词配置
 	DangerousKeywords = []string{
-		"delete", "del", "remove",  "destroy", "logout","loginout",
-		"kill", "shutdown", "reboot", "update", "modify","create",
-		"edit", "change", "reset", "clear","insert","import","enable","disable",
+		"delete", "del", "remove", "destroy", "logout", "loginout",
+		"kill", "shutdown", "reboot", "update", "modify", "create",
+		"edit", "change", "reset", "clear", "insert", "import", "enable", "disable",
 	}
 
 	// 参数错误提示关键词
@@ -291,20 +295,14 @@ var (
 		"upload.js", "api.js", "common.js", "utils.js", "index.js",
 	}
 
-	// 参数模糊测试模式默认值
-	DefaultParamFuzzMode = false
-
-
-
 	// 未授权关键词
 	UnauthorizedKeywords = []string{
-		// 英文关键词
 		"unauthorized", "forbidden", "access denied", "permission denied",
 		"not authorized", "authentication required", "login required",
 		"please login", "please log in", "sign in required",
 		"authentication failed", "invalid credentials", "access forbidden",
 		"insufficient privileges", "no permission",
-		// 中文关键词
+
 		"权限不足", "未授权", "禁止访问", "拒绝访问", "需要登录",
 		"请登录", "认证失败", "身份验证失败", "无权限", "访问被拒绝",
 		"登录失效", "会话过期", "token过期", "token失效",
@@ -329,17 +327,46 @@ var (
 		`stack[_-]?trace`,
 	}
 
-	// API路径提取模式
+	//API路径提取模式
 	APIPatterns = []string{
-		`["']/api/[a-zA-Z0-9/_-]+["']`,
-		`["']/v[0-9]+/[a-zA-Z0-9/_-]+["']`,
-		`["'][a-zA-Z0-9/_-]*\.php["']`,
-		`["'][a-zA-Z0-9/_-]*\.jsp["']`,
-		`["'][a-zA-Z0-9/_-]*\.asp["']`,
-		`["'][a-zA-Z0-9/_-]*\.aspx["']`,
-		`["']/[a-zA-Z0-9/_-]*\?[a-zA-Z0-9&=_-]+["']`,
-		`["']/[a-zA-Z0-9/_-]+["']`, // 匹配简单的API路径，如 '/users', '/admin', '/login' 等
+		`['"](?:/[^\s"'\\]{1,256}|\.{0,2}/[^\s"'\\]{1,256})['"]`,
+		`['"][^\s"']{1,64}\?[^\s"']{3,256}['"]`,
+		"`[^`]{4,256}/(?:api|v\\d+)/[^`\\s]{4,256}",
+		`['"][^\s"']{1,32}(?:['"]\s*\+\s*['"][^\s"']{1,32}){1,3}['"]`,
+		`['"]/(?:api|v\d+|graphql|grpc|oauth|auth|sso|login|logout|token|ws|wss)[^\s"']{0,64}['"]`,
+		`['"][^\s"']*\.(?:php|jsp|asp|aspx|do|action|cfm|pl)\b[^\s"']*['"]`,
 	}
+	//APIPatterns = []string{
+	//	`['"](?:/(?:[^"'\\/]|\\/)+|(?:\.\.?/)?[\w\-~!$&'()*+,;=:@%\.]+)\.(?:php|jsp|asp|aspx|do|action)\b[^"'\\s]*['"]`,
+	//	`['"]/api(?:s)?/[\w\-~!$&'()*+,;=:@%\.\\/]{2,256}['"]`,
+	//	`['"]/v\d+/[\w\-~!$&'()*+,;=:@%\.\\/]{2,256}['"]`,
+	//	`['"]/[^"'\\s?]{1,64}\?[^"'\\s]{3,256}['"]`,
+	//	`['"]/(?:\w+/)?(?:\{\w+\}|:\w+)(?:/(?:\{\w+\}|:\w+)){0,3}['"]`,
+	//	`['"]/(?:graphql|grpc|rest|rpc|jsonrpc)[^"'\\s]{0,64}['"]`,
+	//	`['"]/\w+\.\w+/\w+(?:/[\w\.]{1,64})?['"]`,
+	//	`['"]/(?:oauth|auth|sso|login|logout|token)[^"'\\s]{1,64}['"]`,
+	//	`['"]/(?:ws|wss)[^"'\\s]{3,64}['"]`,
+	//	`['"]/[\w\-~!$&'()*+,;=:@%\.\/]{2,256}['"]`,
+	//	"`[^`]*?/(?:api|v\\d+)/[^`\\s]{4,256}",
+	//	`['"][\w\-~!$&'()*+,;=:@%\.\\/]{1,32}(?:['"]\s*\+\s*['"][\w\-~!$&'()*+,;=:@%\.\\/]{1,32}){1,3}['"]`,
+	//}
+	//APIPatterns = []string{
+	//	// API 路径模式
+	//	`["']/api/[-a-zA-Z0-9()@:%_\\+~#?&\\/=]{1,256}["']`,
+	//	`["']/v\d+/[-a-zA-Z0-9()@:%_\\+~#?&\\/=]{1,256}["']`,
+	//	`["'][-a-zA-Z0-9()@:%_\\+~#?&\\/=]*\.(?:php|jsp|asp|aspx)\b[^"']*["']`,
+	//	`["']/[-a-zA-Z0-9()@:%_\\+~#?&\\/=]+\?[^"']{3,256}["']`,
+	//	`["']/(?!.*\.(?:js|css|png|jpg|jpeg|gif|svg|ico|woff|ttf)\b)[-a-zA-Z0-9()@:%_\\+~#?&\\/=]{1,256}["']`,
+	//}
+
+	//	`["']/api/[a-zA-Z0-9/_-]+["']`,
+	//	`["']/v[0-9]+/[a-zA-Z0-9/_-]+["']`,
+	//	`["'][a-zA-Z0-9/_-]*\.php["']`,
+	//	`["'][a-zA-Z0-9/_-]*\.jsp["']`,
+	//	`["'][a-zA-Z0-9/_-]*\.asp["']`,
+	//	`["'][a-zA-Z0-9/_-]*\.aspx["']`,
+	//	`["']/[a-zA-Z0-9/_-]*\?[a-zA-Z0-9&=_-]+["']`,
+	//	`["']/[a-zA-Z0-9/_-]+["']`,
 
 	// 参数名提取模式
 	ParamNamePatterns = []string{
@@ -400,7 +427,6 @@ func LoadConfig(configPath string) error {
 
 // InitConfig 初始化默认配置
 func InitConfig() {
-	// 设置默认配置
 	if len(Conf.JsFind) == 0 {
 		Conf.JsFind = JsFind
 	}
@@ -555,8 +581,6 @@ func InitConfig() {
 	}
 }
 
-// 进度管理函数（线程安全）
-
 // GetProgress 获取当前进度
 func GetProgress() int {
 	mu.Lock()
@@ -584,8 +608,6 @@ func ResetProgress() {
 	defer mu.Unlock()
 	Progress = 0
 }
-
-// 模糊测试计数管理函数（线程安全）
 
 // GetFuzzNum 获取模糊测试数量
 func GetFuzzNum() int {
