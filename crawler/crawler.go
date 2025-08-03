@@ -17,33 +17,67 @@ type Crawler struct {
 	HTTPClient       *util.HTTPClient       // HTTP客户端
 	Visited          map[string]bool        // 已访问的URL记录
 	JSFiles          []mode.JSFile          // 发现的JS文件列表
+	JSFileCheck      map[string]struct{}    // JS文件查重
 	Links            []mode.Link            // 发现的链接列表
+	LinkCheck        map[string]struct{}    // Link查重
 	SensitiveInfo    []mode.Info            // 提取的敏感信息
+	sourceInfoMap    map[string]int         // 判断是否存储过该源地址的敏感信息
+	SensitiveCheck   map[string]struct{}    // 敏感信息查重
 	FuzzResults      []mode.FuzzResult      // 模糊测试结果
 	DomainInfo       []mode.DomainInfo      // 域名信息
+	DomainCheck      map[string]struct{}    // 域名查重
+	IpCheck          map[string]struct{}    // IP查重
 	ParamFuzzResults []mode.ParamFuzzResult // 参数模糊测试结果
 	mu               sync.RWMutex           // 读写锁，保证并发安全
 	Depth            int                    // 当前爬取深度
 	MaxDepth         int                    // 最大爬取深度
 	BaseURL          string                 // 基础URL
 	Domain           string                 // 目标域名
+	LinkConcurrency  int                    // 链接爬取并发数
+	JSConcurrency    int                    // JS文件获取并发数
 }
 
 // NewCrawler 创建新的爬虫实例
-func NewCrawler(baseURL string, maxDepth int) *Crawler {
+func NewCrawler(baseURL string, maxDepth int, threadCount int) *Crawler {
+	// 根据线程数设置并发数，确保合理的并发控制
+	linkConcurrency := threadCount / 3
+	if linkConcurrency < 1 {
+		linkConcurrency = 1
+	}
+	if linkConcurrency > 10 {
+		linkConcurrency = 10
+	}
+	
+	jsConcurrency := threadCount / 2
+	if jsConcurrency < 1 {
+		jsConcurrency = 1
+	}
+	if jsConcurrency > 20 {
+		jsConcurrency = 20
+	}
+	
+
 	return &Crawler{
 		HTTPClient:       util.NewHTTPClient(),
 		Visited:          make(map[string]bool),
 		JSFiles:          make([]mode.JSFile, 0),
+		JSFileCheck:      make(map[string]struct{}),
 		Links:            make([]mode.Link, 0),
+		LinkCheck:        make(map[string]struct{}),
 		SensitiveInfo:    make([]mode.Info, 0),
+		sourceInfoMap:    make(map[string]int),
+		SensitiveCheck:   make(map[string]struct{}),
 		FuzzResults:      make([]mode.FuzzResult, 0),
 		DomainInfo:       make([]mode.DomainInfo, 0),
+		DomainCheck:      make(map[string]struct{}),
+		IpCheck:          make(map[string]struct{}),
 		ParamFuzzResults: make([]mode.ParamFuzzResult, 0),
 		Depth:            0,
 		MaxDepth:         maxDepth,
 		BaseURL:          baseURL,
 		Domain:           util.ExtractDomain(baseURL),
+		LinkConcurrency:  linkConcurrency,
+		JSConcurrency:    jsConcurrency,
 	}
 }
 
@@ -53,7 +87,6 @@ func (c *Crawler) Start() error {
 	fmt.Printf("[INFO] 最大深度: %d\n", c.MaxDepth)
 	fmt.Printf("[INFO] 线程数: %d\n", config.Conf.Thread)
 
-	// 从基础URL开始递归爬取
 	c.crawlPage(c.BaseURL, 0)
 
 	fmt.Printf("[INFO] 爬取完成\n")
@@ -82,7 +115,6 @@ func (c *Crawler) worker(workChan <-chan CrawlTask, wg *sync.WaitGroup) {
 
 // crawlPage 爬取单个页面
 func (c *Crawler) crawlPage(targetURL string, depth int) {
-	// 检查是否已访问
 	c.mu.Lock()
 	if c.Visited[targetURL] {
 		c.mu.Unlock()
@@ -91,17 +123,14 @@ func (c *Crawler) crawlPage(targetURL string, depth int) {
 	c.Visited[targetURL] = true
 	c.mu.Unlock()
 
-	// 检查深度限制
 	if depth > c.MaxDepth {
 		return
 	}
 
-	// 检查域名限制
 	if !util.IsSameDomain(targetURL, c.BaseURL) {
 		return
 	}
 
-	// 检查危险路由（所有模式都过滤）
 	if util.IsDangerousRoute(targetURL) {
 		c.addSkippedDangerousRoute(targetURL, "危险关键词")
 		fmt.Printf("[WARN] 跳过危险路由: %s\n", targetURL)
@@ -110,15 +139,14 @@ func (c *Crawler) crawlPage(targetURL string, depth int) {
 
 	fmt.Printf("[INFO] 爬取页面: %s (深度: %d)\n", targetURL, depth)
 
-	// 发送HTTP请求
 	resp, err := c.HTTPClient.Get(targetURL)
 	if err != nil {
 		fmt.Printf("[ERROR] 请求失败: %s - %v\n", targetURL, err)
 		return
 	}
+
 	defer resp.Body.Close()
 
-	// 读取响应内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf("[ERROR] 读取响应失败: %s - %v\n", targetURL, err)
@@ -127,9 +155,7 @@ func (c *Crawler) crawlPage(targetURL string, depth int) {
 
 	content := string(body)
 
-	// 记录链接信息
 	title := c.extractTitle(content)
-	// 检查响应内容是否包含权限相关关键词
 	if c.containsUnauthorizedKeywords(content) {
 		if title == "" {
 			title = "需要鉴权"
@@ -144,29 +170,51 @@ func (c *Crawler) crawlPage(targetURL string, depth int) {
 		Status: fmt.Sprintf("%d", resp.StatusCode),
 		Size:   fmt.Sprintf("%d", len(body)),
 		Title:  title,
-		Source: "", // 页面链接的来源为空，表示是直接访问的
+		Source: "",
 	})
 	c.mu.Unlock()
 
-	// 提取JS文件
 	c.extractJSFiles(targetURL, content)
-
-	// 提取敏感信息
 	c.extractSensitiveInfo(targetURL, content)
-
-	// 提取域名信息
 	c.extractDomainInfo(targetURL, content)
 
-	// 提取新链接（如果未达到最大深度）
 	if depth < c.MaxDepth {
 		newLinks := c.extractLinks(targetURL, content)
-		// 将提取的链接添加到Links列表中并设置来源
 		c.addExtractedLinks(newLinks, targetURL)
-		// 递归爬取新链接
-		for _, link := range newLinks {
-			c.crawlPage(link, depth+1)
-		}
+		c.crawlLinksParallel(newLinks, depth+1)
 	}
+}
+
+// crawlLinksParallel 并发爬取链接
+func (c *Crawler) crawlLinksParallel(links []string, depth int) {
+	if len(links) == 0 {
+		return
+	}
+
+	maxConcurrent := c.LinkConcurrency
+	if len(links) < maxConcurrent {
+		maxConcurrent = len(links)
+	}
+
+	linkChan := make(chan string, len(links))
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxConcurrent; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for link := range linkChan {
+				c.crawlPage(link, depth)
+			}
+		}()
+	}
+
+	for _, link := range links {
+		linkChan <- link
+	}
+
+	close(linkChan)
+	wg.Wait()
 }
 
 // extractTitle 提取页面标题
@@ -179,21 +227,16 @@ func (c *Crawler) extractTitle(content string) string {
 	return ""
 }
 
-// extractContentSummary 从页面内容中提取内容摘要
+// extractContentSummary 从页面内容中提取鉴权内容摘要
 func (c *Crawler) extractContentSummary(content string) string {
 	if content == "" {
 		return ""
 	}
-
-	// 使用配置中的未授权关键词列表
 	keywords := config.Conf.UnauthorizedKeywords
-
-	// 查找关键词并提取周围文本
 	contentLower := strings.ToLower(content)
 	for _, keyword := range keywords {
 		keywordLower := strings.ToLower(keyword)
 		if idx := strings.Index(contentLower, keywordLower); idx != -1 {
-			// 提取关键词周围的文本（前后各10个字符）
 			start := idx - 10
 			if start < 0 {
 				start = 0
@@ -203,7 +246,6 @@ func (c *Crawler) extractContentSummary(content string) string {
 				end = len(content)
 			}
 			extract := strings.TrimSpace(content[start:end])
-			// 清理HTML标签
 			extract = c.cleanHTML(extract)
 			if len(extract) > 20 {
 				return util.Truncate(extract, 20)
@@ -231,10 +273,8 @@ func (c *Crawler) extractContentSummary(content string) string {
 
 // cleanHTML 简单清理HTML标签
 func (c *Crawler) cleanHTML(text string) string {
-	// 移除HTML标签
 	re := regexp.MustCompile(`<[^>]*>`)
 	text = re.ReplaceAllString(text, "")
-	// 移除多余的空白字符
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, " ")
 	return strings.TrimSpace(text)
 }
@@ -252,119 +292,110 @@ func (c *Crawler) containsUnauthorizedKeywords(content string) bool {
 
 // extractJSFiles 提取JS文件
 func (c *Crawler) extractJSFiles(baseURL, content string) {
+	var jsURLs []string
+	
+	// 收集所有JS URL
 	for _, pattern := range config.Conf.JsFind {
 		matches := util.RegexFindSubmatch(pattern, content)
 		for _, match := range matches {
 			if len(match) > 1 {
 				jsURL := util.NormalizeURL(baseURL, util.TrimQuotes(match[1]))
 				if jsURL != "" && !c.isJSFileExists(jsURL) {
-					// 过滤不需要的JS文件
 					if c.shouldFilterJS(jsURL) {
 						continue
 					}
-
-					// 获取JS文件内容
-					jsFile := c.fetchJSFile(jsURL, baseURL)
-					if jsFile.Url != "" {
-						c.mu.Lock()
-						c.JSFiles = append(c.JSFiles, jsFile)
-						c.mu.Unlock()
-					}
+					jsURLs = append(jsURLs, jsURL)
 				}
 			}
 		}
 	}
+	
+	if len(jsURLs) == 0 {
+		return
+	}
+	
+	c.fetchJSFilesParallel(jsURLs, baseURL)
+}
+
+// fetchJSFilesParallel 并发获取JS文件
+func (c *Crawler) fetchJSFilesParallel(jsURLs []string, baseURL string) {
+	maxConcurrent := c.JSConcurrency
+	if len(jsURLs) < maxConcurrent {
+		maxConcurrent = len(jsURLs)
+	}
+
+	jsURLChan := make(chan string, len(jsURLs))
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxConcurrent; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for jsURL := range jsURLChan {
+				jsFile := c.fetchJSFile(jsURL, baseURL)
+				if jsFile.Url != "" {
+					c.mu.Lock()
+					c.JSFiles = append(c.JSFiles, jsFile)
+					c.mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	for _, jsURL := range jsURLs {
+		jsURLChan <- jsURL
+	}
+
+	close(jsURLChan)
+	wg.Wait()
 }
 
 // extractSensitiveInfo 提取敏感信息
 func (c *Crawler) extractSensitiveInfo(sourceURL, content string) {
-	// 提取手机号
-	if patterns, ok := config.Conf.InfoFind["phone"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFind(pattern, content)
-			for _, match := range matches {
-				c.addSensitiveInfo("phone", util.TrimQuotes(match), sourceURL)
-			}
-		}
+	// 定义信息类型和对应的处理方式
+	typeMap := map[string]bool{
+		"phone":    false,
+		"email":    false,
+		"idcard":   false,
+		"jwt":      false,
+		"key":      true,
+		"password": true,
+		"name":     true,
+		"other":    true,
 	}
+	
+	c.extractSensitiveInfoParallel(sourceURL, content, typeMap)
+}
 
-	// 提取邮箱
-	if patterns, ok := config.Conf.InfoFind["email"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFind(pattern, content)
-			for _, match := range matches {
-				c.addSensitiveInfo("email", util.TrimQuotes(match), sourceURL)
-			}
-		}
-	}
-
-	// 提取身份证
-	if patterns, ok := config.Conf.InfoFind["idcard"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFind(pattern, content)
-			for _, match := range matches {
-				c.addSensitiveInfo("idcard", util.TrimQuotes(match), sourceURL)
-			}
-		}
-	}
-
-	// 提取JWT
-	if patterns, ok := config.Conf.InfoFind["jwt"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFind(pattern, content)
-			for _, match := range matches {
-				c.addSensitiveInfo("jwt", util.TrimQuotes(match), sourceURL)
-			}
-		}
-	}
-
-	// 提取密钥
-	if patterns, ok := config.Conf.InfoFind["key"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFindSubmatch(pattern, content)
-			for _, match := range matches {
-				if len(match) > 2 {
-					c.addSensitiveInfo("key", fmt.Sprintf("%s=%s", match[1], match[2]), sourceURL)
+// extractSensitiveInfoParallel 并发提取敏感信息
+func (c *Crawler) extractSensitiveInfoParallel(sourceURL, content string, typeMap map[string]bool) {
+	var wg sync.WaitGroup
+	
+	for infoType, isCompound := range typeMap {
+		if patterns, ok := config.Conf.InfoFind[infoType]; ok {
+			wg.Add(1)
+			go func(iType string, iCompound bool, iPatterns []string) {
+				defer wg.Done()
+				for _, pattern := range iPatterns {
+					if iCompound {
+						matches := util.RegexFindSubmatch(pattern, content)
+						for _, match := range matches {
+							if len(match) > 2 {
+								c.addSensitiveInfo(iType, fmt.Sprintf("%s=%s", match[1], match[2]), sourceURL)
+							}
+						}
+					} else {
+						matches := util.RegexFind(pattern, content)
+						for _, match := range matches {
+							c.addSensitiveInfo(iType, util.TrimQuotes(match), sourceURL)
+						}
+					}
 				}
-			}
+			}(infoType, isCompound, patterns)
 		}
 	}
-
-	// 提取密码
-	if patterns, ok := config.Conf.InfoFind["password"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFindSubmatch(pattern, content)
-			for _, match := range matches {
-				if len(match) > 2 {
-					c.addSensitiveInfo("password", fmt.Sprintf("%s=%s", match[1], match[2]), sourceURL)
-				}
-			}
-		}
-	}
-
-	// 提取用户名
-	if patterns, ok := config.Conf.InfoFind["name"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFindSubmatch(pattern, content)
-			for _, match := range matches {
-				if len(match) > 2 {
-					c.addSensitiveInfo("name", fmt.Sprintf("%s=%s", match[1], match[2]), sourceURL)
-				}
-			}
-		}
-	}
-
-	// 提取其他敏感信息
-	if patterns, ok := config.Conf.InfoFind["other"]; ok {
-		for _, pattern := range patterns {
-			matches := util.RegexFindSubmatch(pattern, content)
-			for _, match := range matches {
-				if len(match) > 2 {
-					c.addSensitiveInfo("other", fmt.Sprintf("%s=%s", match[1], match[2]), sourceURL)
-				}
-			}
-		}
-	}
+	
+	wg.Wait()
 }
 
 // extractLinks 提取链接
@@ -377,7 +408,6 @@ func (c *Crawler) extractLinks(baseURL, content string) []string {
 			if len(match) > 1 {
 				link := util.NormalizeURL(baseURL, util.TrimQuotes(match[1]))
 				if link != "" && util.IsValidURL(link) {
-					// 过滤不需要的链接
 					if !c.shouldFilterURL(link) {
 						links = append(links, link)
 					}
@@ -414,14 +444,8 @@ func (c *Crawler) fetchJSFile(jsURL, sourceURL string) mode.JSFile {
 		Sensitive: make([]mode.Info, 0),
 		IsTarget:  false,
 	}
-
-	// 提取API接口
 	jsFile.APIs = c.extractAPIsFromJS(content)
-
-	// 将提取的API作为Link添加到Links列表中
 	c.addAPIsAsLinks(jsFile.APIs, jsURL)
-
-	// 提取敏感信息
 	c.extractSensitiveInfoFromJS(jsURL, content)
 
 	return jsFile
@@ -430,14 +454,11 @@ func (c *Crawler) fetchJSFile(jsURL, sourceURL string) mode.JSFile {
 // extractAPIsFromJS 从JS文件中提取API接口
 func (c *Crawler) extractAPIsFromJS(content string) []string {
 	var apis []string
-
-	// API路径模式
 	for _, pattern := range config.APIPatterns {
 		matches := util.RegexFind(pattern, content)
 		for _, match := range matches {
 			api := util.TrimQuotes(match)
 			if api != "" && len(api) > 1 && api != "/" {
-				// 过滤掉根路径和太短的路径
 				apis = append(apis, api)
 			}
 		}
@@ -454,44 +475,28 @@ func (c *Crawler) extractSensitiveInfoFromJS(jsURL, content string) {
 // addAPIsAsLinks 将API作为Link添加到Links列表中
 func (c *Crawler) addAPIsAsLinks(apis []string, jsURL string) {
 	for _, api := range apis {
-		// 构建完整的API URL
 		apiURL := util.NormalizeURL(c.BaseURL, api)
-		if apiURL != "" {
-			// 检查是否为危险路由（在获取锁之前检查）
+		if apiURL != "" && !c.isLinkExists(apiURL) {
 			if util.IsDangerousRoute(apiURL) {
 				c.addSkippedDangerousRoute(apiURL, "危险关键词")
-				continue // 跳过危险路由
+				continue
 			}
 
+			status, size, title, content := c.getLinkInfo(apiURL)
+			contentSummary := c.extractContentSummary(content)
 			c.mu.Lock()
-			// 检查是否已存在
-			exists := false
-			for _, link := range c.Links {
-				if link.Url == apiURL {
-					exists = true
-					break
-				}
-			}
-
-			if !exists {
-				// 尝试获取API的状态码和基本信息
-				c.mu.Unlock() // 在进行HTTP请求前释放锁
-				status, size, title, content := c.getLinkInfo(apiURL)
-				// 提取页面内容摘要
-				contentSummary := c.extractContentSummary(content)
-				c.mu.Lock() // 重新获取锁以添加到Links
-				c.Links = append(c.Links, mode.Link{
-					Url:     apiURL,
-					Status:  status,
-					Size:    size,
-					Title:   title,
-					Content: contentSummary,
-					Source:  jsURL, // 设置来源为JS文件URL
-				})
-			}
+			c.Links = append(c.Links, mode.Link{
+				Url:     apiURL,
+				Status:  status,
+				Size:    size,
+				Title:   title,
+				Content: contentSummary,
+				Source:  jsURL,
+			})
 			c.mu.Unlock()
 		}
 	}
+
 }
 
 // addExtractedLinks 将提取的链接添加到Links列表中并设置来源
@@ -500,7 +505,6 @@ func (c *Crawler) addExtractedLinks(links []string, sourceURL string) {
 	defer c.mu.Unlock()
 
 	for _, link := range links {
-		// 检查是否已存在
 		exists := false
 		for _, existingLink := range c.Links {
 			if existingLink.Url == link {
@@ -510,9 +514,7 @@ func (c *Crawler) addExtractedLinks(links []string, sourceURL string) {
 		}
 
 		if !exists {
-			// 尝试获取链接的状态码
 			status, size, title, content := c.getLinkInfo(link)
-			// 提取页面内容摘要
 			contentSummary := c.extractContentSummary(content)
 			c.Links = append(c.Links, mode.Link{
 				Url:     link,
@@ -520,13 +522,13 @@ func (c *Crawler) addExtractedLinks(links []string, sourceURL string) {
 				Size:    size,
 				Title:   title,
 				Content: contentSummary,
-				Source:  sourceURL, // 设置来源为发现该链接的页面URL
+				Source:  sourceURL,
 			})
 		}
 	}
 }
 
-// getLinkInfo 获取链接的基本信息（状态码、大小、标题）
+// getLinkInfo 获取链接的基本信息（状态码、大小、标题、内容）
 func (c *Crawler) getLinkInfo(url string) (status, size, title, content string) {
 	resp, err := c.HTTPClient.Get(url)
 	if err != nil {
@@ -541,7 +543,6 @@ func (c *Crawler) getLinkInfo(url string) (status, size, title, content string) 
 
 	content = string(body)
 	title = c.extractTitle(content)
-	// 检查响应内容是否包含权限相关关键词
 	if c.containsUnauthorizedKeywords(content) {
 		if title == "" {
 			title = "需要鉴权"
@@ -554,7 +555,6 @@ func (c *Crawler) getLinkInfo(url string) (status, size, title, content string) 
 
 // extractDomainInfo 提取域名信息
 func (c *Crawler) extractDomainInfo(sourceURL, content string) {
-	// 首次调用时添加目标域名本身
 	if len(c.DomainInfo) == 0 {
 		targetDomain := util.ExtractDomain(c.BaseURL)
 		if targetDomain != "" {
@@ -566,9 +566,12 @@ func (c *Crawler) extractDomainInfo(sourceURL, content string) {
 				CloudType: "",
 				Source:    c.BaseURL,
 			})
+			c.DomainCheck[targetDomain] = struct{}{}
 			c.mu.Unlock()
 		}
 	}
+
+	var newDomains []mode.DomainInfo
 
 	// 提取域名
 	for _, pattern := range config.Conf.DomainFind {
@@ -576,19 +579,24 @@ func (c *Crawler) extractDomainInfo(sourceURL, content string) {
 		for _, match := range matches {
 			if len(match) > 1 {
 				domain := strings.ToLower(util.TrimQuotes(match[1]))
-				if domain != "" && !c.isDomainExists(domain) {
+				if domain == "" {
+					continue
+				}
+				c.mu.RLock()
+				_, exists := c.DomainCheck[domain]
+				c.mu.RUnlock()
+
+				if !exists {
 					domainType := c.getDomainType(domain)
 					cloudType := c.getCloudType(domain)
 
-					c.mu.Lock()
-					c.DomainInfo = append(c.DomainInfo, mode.DomainInfo{
+					newDomains = append(newDomains, mode.DomainInfo{
 						Domain:    domain,
-						IP:        "", // 可以后续添加IP解析
+						IP:        "",
 						Type:      domainType,
 						CloudType: cloudType,
 						Source:    sourceURL,
 					})
-					c.mu.Unlock()
 				}
 			}
 		}
@@ -599,57 +607,107 @@ func (c *Crawler) extractDomainInfo(sourceURL, content string) {
 		matches := util.RegexFind(pattern, content)
 		for _, match := range matches {
 			ip := util.TrimQuotes(match)
-			if ip != "" && !c.isIPExists(ip) {
+			if ip == "" {
+				continue
+			}
+			c.mu.RLock()
+			_, exists := c.IpCheck[ip]
+			c.mu.RUnlock()
+
+			if !exists {
 				ipType := c.getIPType(ip)
 
-				c.mu.Lock()
-				c.DomainInfo = append(c.DomainInfo, mode.DomainInfo{
+				newDomains = append(newDomains, mode.DomainInfo{
 					Domain:    ip,
 					IP:        ip,
 					Type:      ipType,
 					CloudType: "",
 					Source:    sourceURL,
 				})
-				c.mu.Unlock()
 			}
 		}
 	}
+
+	// 一次性添加所有新域名，减少锁的使用次数
+	if len(newDomains) > 0 {
+		c.mu.Lock()
+		for _, domain := range newDomains {
+			// 再次检查，避免在获取锁期间其他goroutine已添加相同域名
+			if domain.IP != "" {
+				if _, exists := c.IpCheck[domain.IP]; !exists {
+					c.DomainInfo = append(c.DomainInfo, domain)
+					c.IpCheck[domain.IP] = struct{}{}
+				}
+			} else {
+				if _, exists := c.DomainCheck[domain.Domain]; !exists {
+					c.DomainInfo = append(c.DomainInfo, domain)
+					c.DomainCheck[domain.Domain] = struct{}{}
+				}
+			}
+		}
+		c.mu.Unlock()
+	}
+}
+
+// isLinkExists 检查链接是否已存在
+func (c *Crawler) isLinkExists(link string) bool {
+	c.mu.RLock()
+	if _, exists := c.LinkCheck[link]; exists {
+		c.mu.RUnlock()
+		return true
+	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.LinkCheck[link]; exists {
+		return true
+	}
+	c.LinkCheck[link] = struct{}{}
+	return false
 }
 
 // isDomainExists 检查域名是否已存在
 func (c *Crawler) isDomainExists(domain string) bool {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	for _, info := range c.DomainInfo {
-		if info.Domain == domain {
-			return true
-		}
+	if _, exists := c.DomainCheck[domain]; exists {
+		c.mu.RUnlock()
+		return true
 	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.DomainCheck[domain]; exists {
+		return true
+	}
+	c.DomainCheck[domain] = struct{}{}
 	return false
 }
 
 // isIPExists 检查IP是否已存在
 func (c *Crawler) isIPExists(ip string) bool {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	for _, info := range c.DomainInfo {
-		if info.IP == ip {
-			return true
-		}
+	if _, exists := c.IpCheck[ip]; exists {
+		c.mu.RUnlock()
+		return true
 	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.IpCheck[ip]; exists {
+		return true
+	}
+	c.IpCheck[ip] = struct{}{}
 	return false
 }
 
 // getDomainType 获取域名类型
 func (c *Crawler) getDomainType(domain string) string {
-	// 检查是否为目标域名
 	if strings.Contains(domain, c.Domain) {
 		return "internal"
 	}
-
-	// 检查是否为云服务域名
 	for _, pattern := range config.Conf.CloudDomains {
 		matched, err := regexp.MatchString(pattern, domain)
 		if err == nil && matched {
@@ -700,107 +758,70 @@ func (c *Crawler) addSensitiveInfo(infoType, value, source string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 检查敏感信息是否已存在
-	for i := range c.SensitiveInfo {
-		if c.SensitiveInfo[i].Source == source {
-			// 更新现有信息
-			switch infoType {
-			case "phone":
-				for _, phone := range c.SensitiveInfo[i].Phone {
-					if phone == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].Phone = append(c.SensitiveInfo[i].Phone, value)
-			case "email":
-				for _, email := range c.SensitiveInfo[i].Email {
-					if email == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].Email = append(c.SensitiveInfo[i].Email, value)
-			case "idcard":
-				for _, idcard := range c.SensitiveInfo[i].IDcard {
-					if idcard == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].IDcard = append(c.SensitiveInfo[i].IDcard, value)
-			case "jwt":
-				for _, jwt := range c.SensitiveInfo[i].JWT {
-					if jwt == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].JWT = append(c.SensitiveInfo[i].JWT, value)
-			case "key":
-				for _, key := range c.SensitiveInfo[i].Key {
-					if key == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].Key = append(c.SensitiveInfo[i].Key, value)
-			case "password":
-				for _, password := range c.SensitiveInfo[i].Password {
-					if password == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].Password = append(c.SensitiveInfo[i].Password, value)
-			case "name":
-				for _, name := range c.SensitiveInfo[i].Name {
-					if name == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].Name = append(c.SensitiveInfo[i].Name, value)
-			case "other":
-				for _, other := range c.SensitiveInfo[i].Other {
-					if other == value {
-						return
-					}
-				}
-				c.SensitiveInfo[i].Other = append(c.SensitiveInfo[i].Other, value)
-			}
-			return
+	key := source + ":" + infoType + ":" + value
+	if _, exists := c.SensitiveCheck[key]; exists {
+		return
+	}
+	c.SensitiveCheck[key] = struct{}{}
+
+	getFieldByType := func(info *mode.Info, typ string) *[]string {
+		switch typ {
+		case "phone":
+			return &info.Phone
+		case "email":
+			return &info.Email
+		case "idcard":
+			return &info.IDcard
+		case "jwt":
+			return &info.JWT
+		case "key":
+			return &info.Key
+		case "password":
+			return &info.Password
+		case "name":
+			return &info.Name
+		case "other":
+			return &info.Other
+		default:
+			return nil
 		}
 	}
 
-	// 创建新的敏感信息
+	if idx, exists := c.sourceInfoMap[source]; exists {
+		field := getFieldByType(&c.SensitiveInfo[idx], infoType)
+		if field == nil {
+			return
+		}
+		*field = append(*field, value)
+		return
+	}
 	newInfo := mode.Info{
 		Source: source,
 	}
-	switch infoType {
-	case "phone":
-		newInfo.Phone = []string{value}
-	case "email":
-		newInfo.Email = []string{value}
-	case "idcard":
-		newInfo.IDcard = []string{value}
-	case "jwt":
-		newInfo.JWT = []string{value}
-	case "key":
-		newInfo.Key = []string{value}
-	case "password":
-		newInfo.Password = []string{value}
-	case "name":
-		newInfo.Name = []string{value}
-	case "other":
-		newInfo.Other = []string{value}
+	field := getFieldByType(&newInfo, infoType)
+	if field == nil {
+		return
 	}
+	*field = []string{value}
 	c.SensitiveInfo = append(c.SensitiveInfo, newInfo)
+	c.sourceInfoMap[source] = len(c.SensitiveInfo) - 1
 }
 
 // isJSFileExists 检查JS文件是否已存在
 func (c *Crawler) isJSFileExists(jsURL string) bool {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	for _, jsFile := range c.JSFiles {
-		if jsFile.Url == jsURL {
-			return true
-		}
+	if _, exists := c.JSFileCheck[jsURL]; exists {
+		c.mu.RUnlock()
+		return true
 	}
+	c.mu.RUnlock()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.JSFileCheck[jsURL]; exists {
+		return true
+	}
+	c.JSFileCheck[jsURL] = struct{}{}
 	return false
 }
 
@@ -817,15 +838,12 @@ func (c *Crawler) shouldFilterJS(jsURL string) bool {
 
 // shouldFilterURL 判断是否应该过滤URL
 func (c *Crawler) shouldFilterURL(targetURL string) bool {
-	// 检查URL过滤规则
 	for _, pattern := range config.Conf.UrlFiler {
 		matched, err := regexp.MatchString(pattern, targetURL)
 		if err == nil && matched {
 			return true
 		}
 	}
-
-	// 检查危险路由（所有模式都过滤）
 	if util.IsDangerousRoute(targetURL) {
 		c.addSkippedDangerousRoute(targetURL, "危险关键词")
 		return true
@@ -838,8 +856,6 @@ func (c *Crawler) shouldFilterURL(targetURL string) bool {
 func (c *Crawler) addSkippedDangerousRoute(url, keyword string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	// 添加到链接列表中，标记为跳过的危险路由
 	skippedLink := mode.Link{
 		Url:    url,
 		Status: "SKIPPED",
