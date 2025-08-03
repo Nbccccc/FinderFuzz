@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nbccccc/FinderFuzz/cmd"
@@ -14,35 +15,28 @@ import (
 	"github.com/Nbccccc/FinderFuzz/util"
 )
 
-// Run 运行爬虫和模糊测试的主入口函数
+// Run 主入口函数
 func Run() error {
-	// 解析命令行参数
 	args := cmd.ParseArgs()
-
-	// 显示帮助信息
 	if args.Help {
 		cmd.ShowHelp()
 		return nil
 	}
-
-	// 验证必要参数
 	if args.URL == "" && args.URLFile == "" {
 		return fmt.Errorf("必须指定目标URL (-u) 或URL文件 (-uf)")
 	}
 
+	// 应用命令行参数到配置
+	applyArgsToConfig(args)
+
 	// 加载配置
 	if args.Config {
-		// 使用YAML配置文件
+		fmt.Printf("[INFO] 加载配置文件%s (全局配置将以文件内为主)", args.ConfigFile)
 		if err := config.LoadConfig(args.ConfigFile); err != nil {
 			return fmt.Errorf("加载配置失败: %v", err)
 		}
-	} else {
-		// 使用默认配置
-		config.InitConfig()
 	}
-
-	// 应用命令行参数到配置
-	applyArgsToConfig(args)
+	config.InitConfig()
 
 	// 显示配置信息
 	showConfig(args)
@@ -53,39 +47,69 @@ func Run() error {
 		return fmt.Errorf("获取目标URL失败: %v", err)
 	}
 
-	// 处理每个目标URL
-	for i, targetURL := range targetURLs {
-		fmt.Printf("\n[INFO] 处理目标 %d/%d: %s\n", i+1, len(targetURLs), targetURL)
-
-		if err := processSingleTarget(targetURL, args); err != nil {
+	if len(targetURLs) == 1 {
+		fmt.Printf("\n[INFO] 处理目标: %s\n", targetURLs[0])
+		if err := processSingleTarget(targetURLs[0], args); err != nil {
 			fmt.Printf("[ERROR] 处理目标失败: %v\n", err)
-			continue
 		}
+	} else {
+		processMultipleTargetsConcurrently(targetURLs, args)
 	}
 
 	fmt.Printf("\n[INFO] 所有目标处理完成\n")
 	return nil
 }
 
+// processMultipleTargetsConcurrently 并发处理多个目标URL
+func processMultipleTargetsConcurrently(targetURLs []string, args *cmd.Args) {
+	maxConcurrent := 5
+	if len(targetURLs) < maxConcurrent {
+		maxConcurrent = len(targetURLs)
+	}
+
+	fmt.Printf("\n[INFO] 开始并发处理 %d 个目标，并发数: %d\n", len(targetURLs), maxConcurrent)
+
+	targetChan := make(chan string, len(targetURLs))
+	var wg sync.WaitGroup
+
+	for i := 0; i < maxConcurrent; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for targetURL := range targetChan {
+				fmt.Printf("[INFO] Worker %d 处理目标: %s\n", workerID+1, targetURL)
+				if err := processSingleTarget(targetURL, args); err != nil {
+					fmt.Printf("[ERROR] Worker %d 处理目标失败: %v\n", workerID+1, err)
+				}
+			}
+		}(i)
+	}
+
+	for _, targetURL := range targetURLs {
+		targetChan <- targetURL
+	}
+
+	close(targetChan)
+	wg.Wait()
+
+	fmt.Printf("[INFO] 所有目标并发处理完成\n")
+}
+
 // applyArgsToConfig 将命令行参数应用到配置
 func applyArgsToConfig(args *cmd.Args) {
-	// 重新初始化Headers map以清除之前的状态
 	config.Conf.Headers = make(map[string]string)
 
-	// 处理从文件读取的请求头
 	if args.ReadHeaders != "" {
 		headers, err := util.ReadHeadersFromFile(args.ReadHeaders)
 		if err != nil {
 			fmt.Printf("[ERROR] 读取headers文件失败: %v\n", err)
 			os.Exit(1)
 		}
-		// 将文件中的headers合并到配置中
 		for key, value := range headers {
 			config.Conf.Headers[key] = value
 		}
 		fmt.Printf("[INFO] 从文件加载了 %d 个请求头\n", len(headers))
 	} else {
-		// 只有在没有使用--read-headers时才处理单个参数
 		if args.UserAgent != "" {
 			config.Conf.Headers["User-Agent"] = args.UserAgent
 		}
@@ -111,12 +135,9 @@ func applyArgsToConfig(args *cmd.Args) {
 		config.Conf.Max = args.Max
 	}
 
-	// 设置模糊测试模式
 	if args.FuzzMode > 0 {
 		config.SetFuzzNum(args.FuzzMode)
 	}
-
-	// 模式开关现在通过命令行参数控制，不再需要设置配置字段
 }
 
 // showConfig 显示配置信息
@@ -247,25 +268,21 @@ func getTargetURLs(args *cmd.Args) ([]string, error) {
 func processSingleTarget(targetURL string, args *cmd.Args) error {
 	startTime := time.Now()
 
-	// 重置进度计数器
 	config.ResetProgress()
 	config.ResetFuzzNum()
 
-	// 创建爬虫
 	maxDepth := getMaxDepth(args.Mode)
-	crawler := NewCrawler(targetURL, maxDepth)
+	crawler := NewCrawler(targetURL, maxDepth, args.Thread)
 
 	// 配置HTTP客户端
-	// 在双权限头模式下，爬虫应该使用低权限头进行爬取，这样才能发现需要权限的接口
+	// 在双权限头模式下，爬虫使用低权限头进行爬取
 	if args.HighHeaders != "" && args.ReadHeaders != "" {
-		// 双权限头模式：使用低权限头进行爬取
 		configureHTTPClientWithHeaders(crawler.HTTPClient, args, args.ReadHeaders)
-	} else {
-		// 传统模式：使用默认配置
-		configureHTTPClient(crawler.HTTPClient, args)
 	}
+	//} else {
+	//	configureHTTPClient(crawler.HTTPClient, args)
+	//}
 
-	// 开始爬取
 	fmt.Printf("[INFO] 开始爬取...\n")
 	if err := crawler.Start(); err != nil {
 		return fmt.Errorf("爬取失败: %v", err)
@@ -302,16 +319,12 @@ func processSingleTarget(targetURL string, args *cmd.Args) error {
 	var unauthorityResults []mode.UnauthorityResult
 
 	if args.AuthorityFuzz {
-		// 收集需要权限检测的URL（只检测那些可能需要鉴权的接口）
 		var urlsToCheck []string
-
-		// 先对所有URL进行初步检测，找出可能需要鉴权的接口
 		urlsToCheck = getURLsRequiringAuthCheck(links, fuzzResults, args)
 
 		if len(urlsToCheck) > 0 {
 			// 检查是否有高权限头文件，决定使用哪种检测模式
 			if args.HighHeaders != "" {
-				// 双权限头检测模式（低权限 vs 高权限）
 				fmt.Printf("[INFO] 开始权限检测（双权限头模式）...\n")
 
 				// 创建低权限客户端
@@ -366,16 +379,11 @@ func processSingleTarget(targetURL string, args *cmd.Args) error {
 
 	// 未授权访问检测
 	if args.UnauthorityFuzz {
-		// 收集需要未授权访问检测的URL（只检测那些可能需要鉴权的接口）
 		var urlsToCheck []string
-
-		// 先对所有URL进行初步检测，找出可能需要鉴权的接口
 		urlsToCheck = getURLsRequiringAuthCheck(links, fuzzResults, args)
 
 		if len(urlsToCheck) > 0 {
-			// 检查是否有高权限头文件，决定使用哪种检测模式
 			if args.HighHeaders != "" {
-				// 双权限头检测模式（低权限 vs 高权限）
 				fmt.Printf("[INFO] 开始未授权访问检测（双权限头模式）...\n")
 
 				// 创建低权限客户端
@@ -391,7 +399,7 @@ func processSingleTarget(targetURL string, args *cmd.Args) error {
 				privilegeChecker.CheckPrivilegeEscalation()
 				{
 					// 将未授权访问检测结果转换为未授权访问检测结果格式
-					// 在双权限头模式下，我们将高权限作为"认证"，低权限作为"无认证"
+					// 在双权限头模式下，将高权限作为"认证"，低权限作为"无认证"
 					// 但只有当确实存在未授权访问漏洞时才转换
 					privilegeResults := privilegeChecker.GetPrivilegeEscalationResults()
 					for _, result := range privilegeResults {
@@ -402,8 +410,8 @@ func processSingleTarget(targetURL string, args *cmd.Args) error {
 								URL:              result.URL,
 								HasAuth:          result.HasHighAuth,
 								NoAuth:           result.HasLowAuth,
-								AuthStatusCode:   result.HighAuthStatusCode, // 高权限状态码作为认证状态码
-								NoAuthStatusCode: result.LowAuthStatusCode,  // 低权限状态码作为无认证状态码
+								AuthStatusCode:   result.HighAuthStatusCode,
+								NoAuthStatusCode: result.LowAuthStatusCode,
 								Vulnerable:       result.Vulnerable,
 								Reason:           result.Reason,
 								AuthRequest:      result.HighAuthRequest,
@@ -416,7 +424,6 @@ func processSingleTarget(targetURL string, args *cmd.Args) error {
 					}
 				}
 			} else {
-				// 传统未授权访问检测模式（有认证 vs 无认证）
 				fmt.Printf("[INFO] 开始未授权访问检测...\n")
 
 				// 创建带认证的HTTP客户端
@@ -440,28 +447,20 @@ func processSingleTarget(targetURL string, args *cmd.Args) error {
 	if args.ParamFuzz {
 		fmt.Printf("[INFO] 开始参数模糊测试...\n")
 
-		// 创建参数模糊测试器
 		paramFuzzer := NewParamFuzzer(targetURL, crawler)
-
-		// 执行参数模糊测试
 		if err := paramFuzzer.StartParamFuzzing(); err != nil {
 			fmt.Printf("[WARN] 参数模糊测试失败: %v\n", err)
 		} else {
 			paramFuzzResults = paramFuzzer.GetResults()
 		}
 	}
-
-	// 显示结果统计
 	showResults(jsFiles, links, sensitiveInfo, fuzzResults, domainInfo, authorityResults, unauthorityResults, paramFuzzResults, time.Since(startTime))
-
-	// 保存结果
 	if args.Output != "" {
 		statusFilter := parseStatusFilter(args.StatusCode)
 		if err := result.SaveToFile(args.Output, jsFiles, links, sensitiveInfo, fuzzResults, domainInfo, authorityResults, unauthorityResults, []mode.PrivilegeEscalationResult{}, paramFuzzResults, statusFilter); err != nil {
 			return fmt.Errorf("保存结果失败: %v", err)
 		}
 	} else {
-		// 控制台输出
 		showConsoleResults(jsFiles, links, sensitiveInfo, fuzzResults, domainInfo, authorityResults, unauthorityResults, paramFuzzResults, args)
 	}
 
@@ -488,11 +487,11 @@ func isNormalPermissionControl(result mode.PrivilegeEscalationResult) bool {
 func getMaxDepth(mode string) int {
 	switch mode {
 	case "normal":
-		return 1 // -m 1: 深度0(起始URL) + 深度1(直接发现的链接)
+		return 1
 	case "thorough":
-		return 2 // -m 2: 深度0 + 深度1 + 深度2
+		return 2
 	case "security":
-		return 3 // -m 3: 深度0 + 深度1 + 深度2 + 深度3
+		return 3
 	default:
 		return 1
 	}
@@ -500,17 +499,14 @@ func getMaxDepth(mode string) int {
 
 // configureHTTPClient 配置HTTP客户端
 func configureHTTPClient(client *util.HTTPClient, args *cmd.Args) {
-	// 设置头部
 	for key, value := range config.Conf.Headers {
 		client.SetHeader(key, value)
 	}
 
-	// 设置代理
 	if config.Conf.Proxy != "" {
 		client.SetProxy(config.Conf.Proxy)
 	}
 
-	// 设置超时
 	client.SetTimeout(time.Duration(config.Conf.Timeout) * time.Millisecond)
 }
 
@@ -519,8 +515,6 @@ func configureHTTPClient(client *util.HTTPClient, args *cmd.Args) {
 func getURLsRequiringAuthCheck(links []mode.Link, fuzzResults []mode.FuzzResult, args *cmd.Args) []string {
 	var candidateURLs []string
 	var urlsRequiringAuth []string
-
-	// 收集所有候选URL
 	for _, link := range links {
 		if util.IsValidURL(link.Url) {
 			candidateURLs = append(candidateURLs, link.Url)
@@ -532,11 +526,7 @@ func getURLsRequiringAuthCheck(links []mode.Link, fuzzResults []mode.FuzzResult,
 			candidateURLs = append(candidateURLs, fuzzResult.URL)
 		}
 	}
-
-	// 去重
 	candidateURLs = util.RemoveDuplicates(candidateURLs)
-
-	// 过滤危险路由
 	candidateURLs = util.FilterDangerousRoutes(candidateURLs)
 
 	// 如果是未授权访问检测模式，返回所有候选URL进行检测
@@ -545,13 +535,10 @@ func getURLsRequiringAuthCheck(links []mode.Link, fuzzResults []mode.FuzzResult,
 		return candidateURLs
 	}
 
-	// 创建用于初步检测的客户端 - 始终使用无认证客户端进行初步检测
+	// 创建用于初步检测的客户端
 	testClient := util.NewHTTPClient()
-	// 只设置基本的User-Agent，不添加任何认证头
 	testClient.Headers = make(map[string]string)
 	testClient.Headers["User-Agent"] = config.DefaultUserAgent
-
-	// 设置代理和超时
 	if config.Conf.Proxy != "" {
 		testClient.SetProxy(config.Conf.Proxy)
 	}
@@ -568,16 +555,12 @@ func getURLsRequiringAuthCheck(links []mode.Link, fuzzResults []mode.FuzzResult,
 			// 请求失败，跳过
 			continue
 		}
-
-		// 检查状态码是否表明需要鉴权
 		if resp.StatusCode == 401 || resp.StatusCode == 403 {
 			urlsRequiringAuth = append(urlsRequiringAuth, url)
 			fmt.Printf("[INFO] 发现需要鉴权的接口: %s (状态码: %d)\n", url, resp.StatusCode)
 		} else {
-			// 检查响应内容是否包含需要鉴权的关键词
 			body, err := util.ReadResponseBody(resp)
 			if err == nil {
-				// 检查是否包含未授权关键词
 				for _, keyword := range config.Conf.UnauthorizedKeywords {
 					if strings.Contains(strings.ToLower(body), strings.ToLower(keyword)) {
 						urlsRequiringAuth = append(urlsRequiringAuth, url)
@@ -587,8 +570,6 @@ func getURLsRequiringAuthCheck(links []mode.Link, fuzzResults []mode.FuzzResult,
 				}
 			}
 		}
-
-		// 添加延迟避免请求过快
 		time.Sleep(100 * time.Millisecond)
 	}
 
@@ -596,23 +577,13 @@ func getURLsRequiringAuthCheck(links []mode.Link, fuzzResults []mode.FuzzResult,
 	return urlsRequiringAuth
 }
 
-
-
 // configureHTTPClientWithHeaders 配置HTTP客户端并添加指定的请求头文件
 func configureHTTPClientWithHeaders(client *util.HTTPClient, args *cmd.Args, headersFile string) {
-	// 在双权限头模式下，不使用config.Conf.Headers，直接使用指定的头文件
-	if args.HighHeaders != "" && args.ReadHeaders != "" {
-		// 双权限头模式：只设置代理和超时，不设置config.Conf.Headers中的头部
-		if config.Conf.Proxy != "" {
-			client.SetProxy(config.Conf.Proxy)
-		}
-		client.SetTimeout(time.Duration(config.Conf.Timeout) * time.Millisecond)
-	} else {
-		// 传统模式：先进行基础配置
-		configureHTTPClient(client, args)
+	if config.Conf.Proxy != "" {
+		client.SetProxy(config.Conf.Proxy)
 	}
+	client.SetTimeout(time.Duration(config.Conf.Timeout) * time.Millisecond)
 
-	// 读取并设置指定的请求头文件
 	if headersFile != "" {
 		headers, err := util.ReadHeadersFromFile(headersFile)
 		if err != nil {
@@ -848,12 +819,11 @@ func showConsoleResults(jsFiles []mode.JSFile, links []mode.Link, sensitiveInfo 
 
 }
 
-// CheckDependencies 检查依赖
-func CheckDependencies() error {
+// CheckConfig 检查配置文件
+func CheckConfig() error {
 	// 检查配置文件是否存在
-	if _, err := os.Stat("config.yaml"); os.IsNotExist(err) {
+	if _, err := os.Stat(cmd.I); err != nil {
 		fmt.Printf("[WARN] 配置文件不存在，将使用默认配置\n")
 	}
-
 	return nil
 }
